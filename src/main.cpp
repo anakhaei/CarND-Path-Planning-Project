@@ -248,14 +248,16 @@ int main() {
           	vector<double> y_vals;
 
 
+
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+
 
 
 						double ref_yaw = deg2rad(car_yaw);
 						double ref_x = car_x;
 						double ref_y = car_y;
 						int lane = 1;
-						double ref_val = 49.0; //mph
+						double ref_val = 0.0; //mph
 
 						int prev_size = previous_path_x.size();
 
@@ -273,11 +275,17 @@ int main() {
 								check_car_s += (double)prev_size * 0.02 * check_speed;
 
 								if((check_car_s > car_s) && ((check_car_s - car_s) < 30) ){
-									ref_val =29.0;
+									// ref_val =29.0;
+									too_close = true;
 
 								}
 
 							}
+						}
+						if (too_close){
+							ref_val-=0.2;
+						}else if (ref_val < 49.5 ){
+							ref_val+=0.2;
 						}
 
 						if (prev_size < 2) {
