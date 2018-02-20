@@ -250,30 +250,57 @@ int main() {
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
-						vector <double> local_s;
-						vector <double> local_d;
-						double dist = 0.5;
-						for (unsigned int i = 0; i < 50 ; i++){
-							local_s.push_back(dist * i);
-							local_d.push_back(0);
-						}
-						cout << "size s = " << local_s.size() << endl;
+
+						double ref_yaw = deg2rad(car_yaw);
+						double ref_x = car_x;
+						double ref_y = car_y;
+						int lane = 1;
+						double ref_val = 49.0; //mph
 
 						int prev_size = previous_path_x.size();
+
+						if (prev_size > 0){
+							car_s = end_path_s;	
+						}
+						bool too_close = false;
+						for (int i = 0; i < sensor_fusion.size(); i++){
+							float d = sensor_fusion[i][6];
+							if ((d< (2+4*lane +2)) && (d> (2+4*lane - 2))){
+								double vx = sensor_fusion[i][3];
+								double vy = sensor_fusion[i][4];
+								double check_speed = sqrt (vx*vx + vy*vy);
+								double check_car_s = sensor_fusion[i][5];
+								check_car_s += (double)prev_size * 0.02 * check_speed;
+
+								if((check_car_s > car_s) && ((check_car_s - car_s) < 30) ){
+									ref_val =29.0;
+
+								}
+
+							}
+						}
+
 						if (prev_size < 2) {
-							x_vals.push_back(car_x-cos(deg2rad(car_yaw)));
-							y_vals.push_back(car_y-sin(deg2rad(car_yaw)));
+							double prev_car_x = car_x-cos(ref_yaw);
+							double prev_car_y = car_y - sin(ref_yaw);
+							x_vals.push_back(prev_car_x);
+							y_vals.push_back(prev_car_y);
 							x_vals.push_back(car_x);
 							y_vals.push_back(car_y);
 
 						}else{
-							x_vals.push_back(previous_path_x[prev_size-2]);
-							y_vals.push_back(previous_path_y[prev_size-2]);
-							x_vals.push_back(previous_path_x[prev_size-1]);
-							y_vals.push_back(previous_path_y[prev_size-1]);
+							ref_x = previous_path_x[prev_size-1];
+							ref_y = previous_path_y[prev_size-1];
+							double ref_x_prev = previous_path_x[prev_size-2];
+							double ref_y_prev = previous_path_y[prev_size-2];
+							ref_yaw = atan2 (ref_y - ref_y_prev , ref_x - ref_x_prev);
+							
+							x_vals.push_back(ref_x_prev);
+							y_vals.push_back(ref_y_prev);
+							x_vals.push_back(ref_x);
+							y_vals.push_back(ref_y);
 						}
 						
-						cout << "size A = " << next_x_vals.size() << endl;
 
 						// for (unsigned int i = 0; i < local_s.size() ; i++){
 						// 	vector<double> vec_xy = getXY(local_s[i] + car_s, local_d[i] + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y); 
@@ -282,27 +309,62 @@ int main() {
 						// }
 
 
-							vector<double> vec_xy0 = getXY(30 + car_s, 0 + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y); 
-							vector<double> vec_xy1 = getXY(60 + car_s, 0 + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y); 
-							vector<double> vec_xy2 = getXY(90 + car_s, 0 + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y); 
-							x_vals.push_back(vec_xy0[0]);
-							y_vals.push_back(vec_xy0[1]);
-							x_vals.push_back(vec_xy1[0]);
-							y_vals.push_back(vec_xy1[1]);
+						vector<double> vec_xy0 = getXY(30 + car_s, 2 + 4*lane , map_waypoints_s, map_waypoints_x, map_waypoints_y); 
+						vector<double> vec_xy1 = getXY(60 + car_s, 2 + 4*lane , map_waypoints_s, map_waypoints_x, map_waypoints_y); 
+						vector<double> vec_xy2 = getXY(90 + car_s, 2 + 4*lane , map_waypoints_s, map_waypoints_x, map_waypoints_y); 
+						x_vals.push_back(vec_xy0[0]);
+						y_vals.push_back(vec_xy0[1]);
+						x_vals.push_back(vec_xy1[0]);
+						y_vals.push_back(vec_xy1[1]);
 
-							x_vals.push_back(vec_xy2[0]);
-							y_vals.push_back(vec_xy2[1]);
+						x_vals.push_back(vec_xy2[0]);
+						y_vals.push_back(vec_xy2[1]);
+
+						for (unsigned int i = 0; i < x_vals.size(); i++){
+							double shift_x = x_vals[i] - ref_x;
+							double shift_y = y_vals[i] - ref_y;
+							x_vals[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
+							y_vals[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+						}
 
 
 
 						tk::spline sp;
    					sp.set_points(x_vals,y_vals);
 
-					for (unsigned int i = 0; i < local_s.size() ; i++){
-							vector<double> vec_xy = getXY(local_s[i] + car_s, local_d[i] + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y); 
-							next_x_vals.push_back(vec_xy[0]);
-							next_y_vals.push_back(sp(vec_xy[0]));
-						}
+
+					for (unsigned int i = 0; i< previous_path_x.size(); i++){
+						next_x_vals.push_back(previous_path_x[i]);
+						next_y_vals.push_back(previous_path_y[i]);
+					}
+
+					double target_x = 30.0;
+					double target_y = sp(target_x);
+					double target_dist = sqrt(target_x*target_x + target_y*target_y);
+					double x_add = 0;
+
+					cout << "------------------------------------------------------------ "  << endl;
+
+
+
+					for (unsigned int i = 1; i<= 50 - previous_path_x.size(); i++) {
+						int N = (target_dist)/ (0.02 * ref_val/2.24);
+						double x_point = x_add + target_x/N;
+						double y_point = sp(x_point);
+						x_add = x_point;
+						double x_ref = x_point;
+						double y_ref = y_point;
+
+						x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+						y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+						x_point += ref_x;
+						y_point += ref_y;
+						next_x_vals.push_back(x_point);
+						next_y_vals.push_back(y_point);
+						cout << i << " , " << x_point << ", " << y_point << endl;
+					}
+
 
 
 
