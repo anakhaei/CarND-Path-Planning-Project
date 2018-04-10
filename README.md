@@ -28,7 +28,7 @@ I developled a simple Behavior Planner and Trajectory Planner:
 4. Run it: `./path_planning`.
 
 ## Discussion
-I followed the instructions to the course to implement path planning algorithms. Using IDM helps to come up with a smooth trajectory (Acc/Velocity)
+I followed the instructions to the course to implement path planning algorithms. Using IDM helps to come up with a smooth trajectory.
    
 
 
