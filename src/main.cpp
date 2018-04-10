@@ -10,7 +10,6 @@
 #include "Eigen-3.3/Eigen/LU"
 #include "json.hpp"
 #include "spline.h"
-#include "vehicle.h"
 
 #include <cmath>
 
@@ -25,6 +24,7 @@ using json = nlohmann::json;
 // state: -1: LCL, 0:KL,1: LCR
 static int state_g = 0;
 static int target_lane_g = 1;
+static double a_prev_prev_g = 0.0;
 
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
@@ -212,9 +212,10 @@ bool isFrontClear(double car_s, int lane, double s_dot, std::vector<std::vector<
 			double vy = sensor_fusion[i][4];
 			double check_speed = sqrt(vx * vx + vy * vy);
 			double check_car_s = sensor_fusion[i][5];
+			double front_car_s = check_car_s;
 			check_car_s += (double)prev_size * 0.02 * check_speed;
 
-			if ((check_car_s > car_s) && ((check_car_s - car_s) < 30))
+			if ((front_car_s > car_s) && ((front_car_s - car_s) < 50))
 			{
 
 				cout << " Front is not clear" << endl;
@@ -236,9 +237,10 @@ bool isSideLaneClear(double car_s, int lane, double s_dot, std::vector<std::vect
 			double vy = sensor_fusion[i][4];
 			double check_speed = sqrt(vx * vx + vy * vy);
 			double check_car_s = sensor_fusion[i][5];
+			double front_car_s = check_car_s;
 			check_car_s += (double)prev_size * 0.02 * check_speed;
 
-			if ((check_car_s > (car_s - 10)) && ((check_car_s - car_s) < 30))
+			if ((front_car_s > (car_s - 10)) && ((front_car_s - car_s) < 50))
 			{
 
 				cout << " Side is not clear" << endl;
@@ -249,10 +251,16 @@ bool isSideLaneClear(double car_s, int lane, double s_dot, std::vector<std::vect
 	return true;
 }
 
-double desiredVelocity(double car_s, int lane, double s_dot, std::vector<std::vector<double>> sensor_fusion, int prev_size)
+
+std::vector<double> IDMparameters(double car_s, int lane, double s_dot, std::vector<std::vector<double>> sensor_fusion, int prev_size)
 {
-	cout << "#########################  desiredVelocity " << endl;
-	double des_vel = 48 * 0.44704;
+	double delta_v = s_dot;
+	double actual_gap = 1000;
+
+	std::vector<double> idm_param;
+	idm_param.push_back(actual_gap);
+	idm_param.push_back(delta_v);
+
 	for (int i = 0; i < sensor_fusion.size(); i++)
 	{
 		float d = sensor_fusion[i][6];
@@ -264,36 +272,28 @@ double desiredVelocity(double car_s, int lane, double s_dot, std::vector<std::ve
 			double check_car_s = sensor_fusion[i][5];
 			double front_car_s = check_car_s;
 			check_car_s += (double)prev_size * 0.02 * check_speed;
-			cout << "front car s : " << front_car_s << ", car_s:" << car_s << endl;
 
-			if ((front_car_s > car_s) &&(front_car_s - car_s) < 30)
+			if ((front_car_s > car_s) && (front_car_s - car_s) < 50)
 			{
-				des_vel = check_speed - 3.0;
-				cout << " ********* close      ************ desiredVelocity:  " << des_vel << endl;
-				return des_vel;
-			}
-
-			if ((check_car_s > car_s) && ((check_car_s - car_s) < 30))
-			{
-				//des_vel = check_speed * 0.44704;
-				des_vel = check_speed;
-
-				cout << " ************************************* desiredVelocity:  " << des_vel << endl;
-				return des_vel;
+				idm_param[0] = front_car_s - car_s;
+				idm_param[1] = s_dot - check_speed;
+				return idm_param;
 			}
 		}
 	}
-	return des_vel;
+	return idm_param;
 }
 
 // 0: KL, 1: LCR, -1: LCL
-int makeDecision(double s, double d, double s_dot, std::vector<std::vector<double>> sensor_fusion, double &des_vel, int prev_size)
+//int makeDecision(double s, double d, double s_dot, std::vector<std::vector<double>> sensor_fusion, double &des_vel, int prev_size)
+int makeDecision(double s, double d, double s_dot, std::vector<std::vector<double>> sensor_fusion, double &actual_gap, double &delta_v, int prev_size)
 {
 
-	// std::cout << "--------------- makeDecision-------------------" << endl;
-	// cout << "state_g = " << state_g << endl;
 	int lane = d / 4;
 	int decision = 0;
+
+	delta_v = s_dot;
+	actual_gap = 1000;
 
 	if ((state_g == 1 || state_g == -1) && target_lane_g != lane)
 	{
@@ -308,7 +308,6 @@ int makeDecision(double s, double d, double s_dot, std::vector<std::vector<doubl
 		if (!isFrontClear(s, lane, s_dot, sensor_fusion, prev_size))
 		{
 
-			std::cout << "makeDecision: Front is not Clear" << endl;
 			if (lane == 0)
 			{
 				if (isSideLaneClear(s, lane + 1, s_dot, sensor_fusion, prev_size))
@@ -341,12 +340,12 @@ int makeDecision(double s, double d, double s_dot, std::vector<std::vector<doubl
 
 			if (decision == 0)
 			{
-				des_vel = desiredVelocity(s, lane, s_dot, sensor_fusion, prev_size);
+				std::vector<double> idm_param = IDMparameters(s, lane, s_dot, sensor_fusion, prev_size);
+				actual_gap = idm_param[0];
+				delta_v = idm_param[1];
 			}
 		}
 	}
-	// std::cout << "decision: " << decision << ", des_vel: " << des_vel << endl;
-	// std::cout << "-------------------------------------" << endl;
 	state_g = decision;
 
 	return decision;
@@ -451,56 +450,43 @@ int main()
 					double car_v = car_speed * 0.44704;
 
 					int prev_size = previous_path_x.size();
-					int number_of_point_from_prev_path = 3;
+					int number_of_point_from_prev_path = 10;
 
 					//Status
 					cout << " ----------------------------------------------- " << endl;
-					cout << "car_x: " << car_x << endl;
-					cout << "car_y: " << car_y << endl;
-					cout << "car_s: " << car_s << endl;
-					cout << "car_d: " << car_d << endl;
-					cout << "lane: " << lane << endl;
+					// cout << "car_x: " << car_x << endl;
+					// cout << "car_y: " << car_y << endl;
+					// cout << "car_s: " << car_s << endl;
+					// cout << "car_d: " << car_d << endl;
+					// cout << "lane: " << lane << endl;
 					cout << "car_v: " << car_v << endl;
-					cout << "prev_size: " << prev_size << endl;
+					// cout << "prev_size: " << prev_size << endl;
 
 					//Make Decision
 					double des_vel = 48 * 0.44704;
-					int decision = makeDecision(car_s, car_d, car_v, sensor_fusion, des_vel, prev_size);
+					double delta_v = car_v;
+					double actual_gap = 100;
+					//int decision = makeDecision(car_s, car_d, car_v, sensor_fusion, des_vel, prev_size);
+					int decision = makeDecision(car_s, car_d, car_v, sensor_fusion, actual_gap, delta_v, prev_size);
 
 					cout << "decision: " << decision << endl;
-					cout << "des_vel: " << des_vel << endl;
+					cout << "delta_v: " << delta_v << endl;
+					cout << "actual_gap: " << actual_gap << endl;
 
 					lane = target_lane_g;
 
-					//cout << "previous_path_y: " << previous_path_y.size() << endl;
+					double a_max = 9.0;
+					double a_min = -9.0;
 
-					//
-
-					//Current State
-					// double current_s = car_s;
-					// double current_v = car_speed * 0.44704;
-					// double desired_v = current_v;
-					// double current_a = 0.0;
-					// double previous_s = 0.0;
-					// double previous_v = 0.0;
-					double a_max = 8.0;
-					double a_min = -8.0;
-
-					double jerk_max = 8.0;
-					double jerk_min = -8.0;
-					double v_max = 48 * 0.44704;
+					double jerk_max = 9.0;
+					double jerk_min = -9.0;
+					double v_max = 48.0 * 0.44704;
 					double v_min = 1;
 
-					cout << "updated lane: " << lane << endl;
-					//std::cout << current_v << ", " << desired_v << ", " << v_max << std::endl;
-
-					// if (ref_val > v_limit)
-					// 	ref_val = v_limit-0.5;
 
 					double v_prev = 0.0;
-					//double a_prev = 0.0;
 					double v_prev_prev = 0.0;
-					double a_prev_prev = 0.0;
+					double a_prev_prev = a_prev_prev_g;
 
 					if (prev_size < number_of_point_from_prev_path)
 					{
@@ -534,19 +520,19 @@ int main()
 						double d = sqrt((ref_x - ref_x_prev) * (ref_x - ref_x_prev) + (ref_y - ref_y_prev) * (ref_y - ref_y_prev));
 						double d_prev = sqrt((ref_x_prev_prev - ref_x_prev) * (ref_x_prev_prev - ref_x_prev) + (ref_y_prev_prev - ref_y_prev) * (ref_y_prev_prev - ref_y_prev));
 
-						cout << "ref_x: " << ref_x << endl;
-						cout << "ref_y: " << ref_y << endl;
-						cout << "ref_x_prev: " << ref_x_prev << endl;
-						cout << "ref_y_prev: " << ref_y_prev << endl;
-						cout << "ref_x_prev_prev: " << ref_x_prev_prev << endl;
-						cout << "ref_y_prev_prev: " << ref_y_prev_prev << endl;
-						cout << "d: " << d << endl;
-						cout << "d_prev: " << d_prev << endl;
+						// cout << "ref_x: " << ref_x << endl;
+						// cout << "ref_y: " << ref_y << endl;
+						// cout << "ref_x_prev: " << ref_x_prev << endl;
+						// cout << "ref_y_prev: " << ref_y_prev << endl;
+						// cout << "ref_x_prev_prev: " << ref_x_prev_prev << endl;
+						// cout << "ref_y_prev_prev: " << ref_y_prev_prev << endl;
+						// cout << "d: " << d << endl;
+						// cout << "d_prev: " << d_prev << endl;
 
 						v_prev_prev = d_prev / delta_t_;
 						v_prev = d / delta_t_;
 
-						a_prev_prev = (v_prev - v_prev_prev) / delta_t_;
+						//a_prev_prev = (v_prev - v_prev_prev) / delta_t_;
 
 						x_vals.push_back(ref_x_prev);
 						y_vals.push_back(ref_y_prev);
@@ -558,10 +544,22 @@ int main()
 					cout << "v_prev: " << v_prev << endl;
 					cout << "a_prev_prev: " << a_prev_prev << endl;
 
-					double desired_a_prev = std::min((des_vel - v_prev) / 3.0, a_max);
+					//double desired_a_prev = std::min((des_vel - v_prev) / 3.0, a_max);
+					double s_0 = 20.0;
+					double t_gap = 1.5;
+					double a_acc = 9.0;
+					double a_dec = 9.0;
+					double s_star = s_0 + std::max(0.0, (car_v * t_gap + car_v * delta_v / (2 * sqrt(a_acc * a_dec))));
+
+					if (actual_gap == 0.0)
+						actual_gap = 1.0;
+					double desired_a_prev = a_acc * (1 - ((car_v) / (v_max)) - (s_star / actual_gap) * (s_star / actual_gap));
+
+
+					desired_a_prev = std::min(desired_a_prev, a_max);
 					desired_a_prev = std::max(desired_a_prev, a_min);
 
-					double jerk = (desired_a_prev - a_prev_prev) / 0.02;
+					double jerk = (desired_a_prev - a_prev_prev) / delta_t_;
 					jerk = std::min(jerk, jerk_max);
 					jerk = std::max(jerk, jerk_min);
 
@@ -576,21 +574,8 @@ int main()
 					cout << "jerk: " << jerk << endl;
 					cout << "a_prev: " << a << endl;
 					cout << "v: " << v << endl;
+					a_prev_prev_g = a;
 
-					// if (car_v < des_vel - 2.0)
-					// {
-					// 	car_v = car_v + 0.5;
-					// }
-					// else if (car_v > des_vel - 1.0)
-					// {
-					// 	car_v = car_v - 0.5;
-					// }
-
-					// for (unsigned int i = 0; i < local_s.size() ; i++){
-					// 	vector<double> vec_xy = getXY(local_s[i] + car_s, local_d[i] + car_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-					// 	x_vals.push_back(vec_xy[0]);
-					// 	y_vals.push_back(vec_xy[1]);
-					// }
 
 					vector<double> vec_xy0 = getXY(30 + car_s, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 					vector<double> vec_xy1 = getXY(45 + car_s, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -624,35 +609,12 @@ int main()
 						next_y_vals.push_back(previous_path_y[i]);
 					}
 
-					// std::vector <double> current_state = {car_s, };
-					// std::vector <double> goal_state;
-
-					//current_state =
-
-					//double target_x = 30.0;
-					//std::cout << "here 1" << std::endl;
-					//double target_y = sp(target_x);
-					//double target_dist = sqrt(target_x * target_x + target_y * target_y);
 					double x_add = 0;
-					//car_v = 10 * 0.44704;
-					//double displacement = car_v * 0.02;
-					//double displacement = 0.5;
-
-					cout << "-------------- start loop - " << endl;
-					//cout << "car_v: " << car_v << endl;
-
-					//for (unsigned int i = 1; i <= 50 - previous_path_x.size(); i++)
-					//if (car_v==0.0)
-					//for (unsigned int i = 0; i < 50 - previous_path_x.size(); i++)
 
 					for (unsigned int i = 0; i < 50 - number; i++)
 					{
-						//int N = (target_dist) / (0.02 * ref_val / 2.24);
-						//int N = (target_dist) / (0.02 * car_v);
-						//double x_point = x_add + target_x / N;
 						double displacement = v * delta_t_;
 						double x_point = x_add + displacement;
-						//cout << i << ", car_v: " << car_v <<  ", displacement: " << displacement << ", x_point: " << x_point<< endl;
 
 						double y_point = sp(x_point);
 						x_add = x_point;
@@ -667,53 +629,24 @@ int main()
 						next_x_vals.push_back(x_point);
 						next_y_vals.push_back(y_point);
 
-						//cout << i << " , " << x_point << ", " << y_point << endl;
-						// if (car_v < des_vel - 2.0)
-						// {
-						// 	car_v = car_v + 0.5;
-						// }
-						// else if (car_v > des_vel - 1.0)
-						// {
-						// 	car_v = car_v - 0.5;
-						// }
 
-						// if (car_v < des_vel - 3.0)
-						// {
-						// 	car_v = car_v + a_acc * delta_t_;
-						// }
-						// else if (car_v > des_vel - 1.0)
-						// {
-						// 	car_v = car_v + a_dec * delta_t_;
-						// }
-						//cout << "v: " << v << ", des_vel: " << des_vel << endl;
-						if ((v < des_vel - 2) || (v > des_vel))
+						if ((a < desired_a_prev - 0.5) || (a > desired_a_prev + 0.5))
 						{
-							a = a + jerk * delta_t_;
+							jerk = (desired_a_prev - a) / delta_t_;
+							jerk = std::min(jerk, jerk_max);
+							jerk = std::max(jerk, jerk_min);
+
+							a = a_prev_prev_g + jerk * delta_t_;
 							a = std::max(a, a_min);
 							a = std::min(a, a_max);
+
 							v = v + a * delta_t_;
+							a_prev_prev_g = a;
+
 						}
+
 						v = std::max(v, v_min);
 						v = std::min(v, v_max);
-						//cout << "jerk: " << desired_jerk_prev_prev << endl;
-						//cout << "a_prev: " << a_prev << endl;
-						//cout << "v: " << v << endl;
-					}
-
-					//cout << "size B = " << next_x_vals.size() << endl;
-					double p_x = next_x_vals[0];
-					double p_y = next_y_vals[0];
-
-					for (int i = 1; i < next_x_vals.size(); i++)
-					{
-						double c_x = next_x_vals[i];
-						double c_y = next_y_vals[i];
-						double dis = sqrt((c_x - p_x) * (c_x - p_x) + (c_y - p_y) * (c_y - p_y));
-						p_x = c_x;
-						p_y = c_y;
-
-						//cout << next_x_vals[i] << " , " <<  next_y_vals[i] << endl;
-						//cout << i << " dis: " << dis << " vel: " << dis/0.02 << endl;
 					}
 
 					msgJson["next_x"] = next_x_vals;
